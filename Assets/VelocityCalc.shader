@@ -5,7 +5,7 @@ Shader "Hidden/VelocityCalc"
         _HeightMap ("HeightMap", 2D) = "white" {}
         _NormalMap ("NormalMap", 2D) = "bump" {}
         _RimHeight ("RimHeight", 2D) = "white" {}
-        _Gravity ("Gravity (x,y,z)", Vector) = (0,0,0,0)
+        _Gravity ("Gravity (x,y)", Vector) = (0,0,0,0) // x = pan.x, y = pan.z (mapped below)
         _TexelSize ("TexelSize (1/width,1/height)", Vector) = (0.01,0.01,0,0)
         _kSlope ("Slope Gain", Float) = 0.6
         _kGravity ("Gravity Gain", Float) = 1.0
@@ -33,7 +33,7 @@ Shader "Hidden/VelocityCalc"
             sampler2D _NormalMap;
             sampler2D _RimHeight;
 
-            float4 _Gravity;    // x,y used
+            float4 _Gravity;    // C# passes: x = pan.x, y = pan.z
             float4 _TexelSize;  // x = 1/width, y = 1/height
             float _kSlope;
             float _kGravity;
@@ -63,27 +63,25 @@ Shader "Hidden/VelocityCalc"
             // sample height with clamp safety
             inline float SampleHeight(float2 uv)
             {
-                // assume height is stored in .r and in reasonable 0..1 range; clamp to avoid extremes
                 float h = tex2D(_HeightMap, uv).r;
-                return saturate(h); // clamp to [0,1]
+                return saturate(h); // clamp to [0,1] for safety
             }
 
-            // central difference gradient in texture space (units = height per texel)
+            // central difference gradient in texture-space (units: height / uv)
             inline float2 SampleHeightGradient(float2 uv)
             {
                 float2 ts = _TexelSize.xy;
-                // offsets in uv
-                float2 offX = float2(ts.x, 0);
-                float2 offY = float2(0, ts.y);
+                // fallback if texel size is zero (avoid div by zero)
+                float ex = max(ts.x, 1e-6);
+                float ey = max(ts.y, 1e-6);
 
-                float hL = tex2D(_HeightMap, uv - offX).r;
-                float hR = tex2D(_HeightMap, uv + offX).r;
-                float hD = tex2D(_HeightMap, uv - offY).r;
-                float hU = tex2D(_HeightMap, uv + offY).r;
+                float hL = tex2D(_HeightMap, uv - float2(ex, 0)).r;
+                float hR = tex2D(_HeightMap, uv + float2(ex, 0)).r;
+                float hD = tex2D(_HeightMap, uv - float2(0, ey)).r;
+                float hU = tex2D(_HeightMap, uv + float2(0, ey)).r;
 
-                // central diff
-                float hx = (hR - hL) / (2.0 * ts.x + 1e-6);
-                float hy = (hU - hD) / (2.0 * ts.y + 1e-6);
+                float hx = (hR - hL) / (2.0 * ex);
+                float hy = (hU - hD) / (2.0 * ey);
                 return float2(hx, hy);
             }
 
@@ -91,52 +89,48 @@ Shader "Hidden/VelocityCalc"
             {
                 float2 uv = i.uv;
 
-                // read height and rim
-                float h = SampleHeight(uv);
+                // rim height: if not provided, assume inside pan (1.0)
                 float rimH = tex2D(_RimHeight, uv).r;
-
-                // if rim map is present and rimH <= 0 treat as outside (no flow)
-                if (rimH <= 0.0)
-                {
-                    // Output zero velocity outside pan area
+                if (rimH <= 0.0) {
+                    // Either outside pan or rimTexture uses 0 to indicate outside.
+                    // If you want no rim mask, ensure rim texture is filled with >0 values.
                     return float4(0.0, 0.0, 0.0, 1.0);
                 }
 
-                // clamp height by rim height if rimH > 0
+                // height (clamped)
+                float h = SampleHeight(uv);
                 h = min(h, rimH);
 
-                // normal (stored in 0..1, convert to -1..1 and normalize)
+                // normal: convert 0..1 -> -1..1 and normalize
                 float4 n4 = tex2D(_NormalMap, uv);
-                float3 N = normalize(n4.xyz * 2.0 - 1.0);
+                float3 N = normalize(n4.xyz * 2.0 - 1.0 + 1e-6);
 
-                // gradient
+                // gradient in uv space
                 float2 grad = SampleHeightGradient(uv);
 
-                // 既に G = float3(_Gravity.x, _Gravity.y, _Gravity.z) を取っている想定
-float3 G = float3(_Gravity.x, _Gravity.y, _Gravity.z);
+                // === CRUCIAL: map 2D passed gravity into 3D correctly ===
+                // C# passes: _Gravity.x = panLocal.x, _Gravity.y = panLocal.z
+                // Build 3D gravity vector in pan-local coords: (gx, 0, gz)
+                float3 G = float3(_Gravity.x, 0.0, _Gravity.y);
 
-// project gravity onto tangent plane
-float3 g_tangent3 = G - N * dot(G, N);
+                // project gravity onto tangent plane of the surface
+                float3 g_tangent3 = G - N * dot(G, N);
 
-// MAPPING: テクスチャの V が pan-local Z を表す場合は x,z を使う
-float2 g_tangent = float2(g_tangent3.x, g_tangent3.z);
+                // mapping: texture U corresponds to pan-local X, texture V corresponds to pan-local Z
+                float2 g_tangent = float2(g_tangent3.x, g_tangent3.z);
 
-
-                // base velocity estimate: slope-driven + gravity-driven
-                // negative gradient -> flow toward lower height
+                // base velocity: flow toward lower height + gravity along surface
                 float2 v = -_kSlope * grad + _kGravity * g_tangent * sqrt(max(h, 1e-6));
 
-                // damping to reduce high-frequency oscillations
+                // damping to reduce numerical oscillation
                 v *= _Damping;
 
-                // clamp to max velocity
+                // clamp
                 float len = length(v);
                 if (len > _maxVel && len > 1e-9)
-                {
                     v = v * (_maxVel / len);
-                }
 
-                // pack into RG (BA unused, A=1 for convenience)
+                // pack into RG
                 return float4(v.x, v.y, 0.0, 1.0);
             }
             ENDCG

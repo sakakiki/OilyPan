@@ -40,13 +40,16 @@ public class ParticleDrawingController : MonoBehaviour
 
     [Header("入力 / 傾き")]
     [SerializeField] private bool useGyroOnDevice = true; // モバイルでジャイロを使うか
-    [SerializeField] private float pcTiltSpeed = 40f; // WASD/矢印で傾ける速度（deg/sec）
-    [SerializeField] private float mouseTiltSensitivity = 0.2f; // 右ドラッグでの感度
+    [SerializeField] private float pcTiltMax = 45f; // WASD・矢印で傾けることのできる最大角度
 
     // デバッグ切替（ファイル保存や Readback は高コストなので任意で有効化）
     [Header("デバッグ")]
     [SerializeField] private bool enableDebugReadback = true;
-    [SerializeField] private float savePngInterval = 1.0f; // PNG 保存間隔(秒)
+    [SerializeField] private float savePngInterval = 1.0f; // PNG 保存間隔(秒)// 計算用 rtVelocity は既にある。
+    // 可視化用 RT を追加
+    private RenderTexture rtVelocityDebug;
+    [SerializeField] private Material velocityVisualizerMaterial; // assign VelocityCalc_Visualizer
+    [SerializeField] private int debugDisplaySize = 128; // 表示サイズ（小さくてOK）
 
     // --- 内部状態 ---
     private RenderTexture rtHeight;
@@ -58,7 +61,6 @@ public class ParticleDrawingController : MonoBehaviour
     private CommandBuffer commandBuffer;
     private Quaternion panLocalRotation = Quaternion.identity;
     private Vector2[] particleVelocities; // 粒子ごとの速度を保持（平滑化・摩擦に使用）
-    private Quaternion prevPanLocalRotation = Quaternion.identity;
 
     // velocity readback
     private Texture2D velocityReadTex;
@@ -126,7 +128,7 @@ public class ParticleDrawingController : MonoBehaviour
         for (int i = 0; i < particleCount; i++)
         {
             // 初期位置は -0.1..0.1（スクリーン/パン空間）。レンダリングの Ortho が -0.5..0.5.
-            particlePositions[i] = new Vector3(Random.Range(-0.1f, 0.1f), Random.Range(-0.1f, 0.1f), 0);
+            particlePositions[i] = new Vector3(Random.Range(-0.01f, 0.01f), Random.Range(-0.01f, 0.01f), 0);
             matrices[i] = Matrix4x4.identity;
         }
 
@@ -185,7 +187,6 @@ public class ParticleDrawingController : MonoBehaviour
         // Start() の終わり近くに追加
         particleVelocities = new Vector2[particleCount];
         for (int i = 0; i < particleCount; i++) particleVelocities[i] = Vector2.zero;
-        prevPanLocalRotation = panLocalRotation;
 
         // Velocity shader のより安全な初期値
         if (velocityMaterial != null)
@@ -195,6 +196,12 @@ public class ParticleDrawingController : MonoBehaviour
             velocityMaterial.SetFloat("_maxVel", 0.6f);   // 安全側
         }
         velocityToParticleScale = Mathf.Clamp(velocityToParticleScale, 0.05f, 2.0f); // 安全域
+
+        rtVelocityDebug = new RenderTexture(debugDisplaySize, debugDisplaySize, 0, RenderTextureFormat.ARGBHalf) {
+            useMipMap = false, autoGenerateMips = false, filterMode = FilterMode.Bilinear, wrapMode = TextureWrapMode.Clamp
+        };
+        rtVelocityDebug.Create();
+
 
         Debug.Log("[DEBUG] ParticleDrawingController_Debug_Modified started. RT sizes: " + textureResolution + "x" + textureResolution + ", velocity: " + velocityResolution + "x" + velocityResolution);
     }
@@ -219,30 +226,40 @@ public class ParticleDrawingController : MonoBehaviour
         // 4) velocity RT を GPU で計算（height + normal を参照）→ 低解像度 RT に出力
         if (velocityMaterial != null)
         {
-            // Compute gravity in pan-local coordinates (panLocalRotation is internal, object not rotated)
-Vector3 gravityWorld = Physics.gravity; // (0, -9.81f, 0)
-Vector3 gravityInPanLocal = Quaternion.Inverse(panLocalRotation) * gravityWorld;
+            // Debug-safe gravity mapping (temporary)
+            // compute in pan-local
+            Vector3 gravityWorld = Physics.gravity; // (0,-9.81,0)
+            Vector3 gravityInPanLocal = Quaternion.Inverse(panLocalRotation) * gravityWorld;
 
-// Dead zone: 小さな傾きは無視
-float tiltAngle = Quaternion.Angle(panLocalRotation, Quaternion.identity);
-if (tiltAngle < 0.5f) gravityInPanLocal = Vector3.zero;
+            // Map: pan.x -> shader.x, pan.z -> shader.y (screen-forward is pan.z)
+            float rawGx = gravityInPanLocal.x;
+            float rawGz = gravityInPanLocal.z;
 
-// MAP: テクスチャの V 軸 = pan-local Z（画面奥が下）の想定
-// つまり shader 側の (Gx, Gy) には (pan.x, pan.z) を渡す
-float gscale = gravityScale; // Inspector で設定している scale
-Vector3 gravityForShader = new Vector3(gravityInPanLocal.x * gscale, gravityInPanLocal.z * gscale, 0f);
+            // scale down heavily for debug so we see effect without blow-up
+            float debugScale = Mathf.Min(gravityScale, 0.5f); // force <= 0.5 for now
+            Vector3 gravityForShader = new Vector3(rawGx * debugScale, rawGz * debugScale, 0f);
 
-// デバッグログ（任意）
-if (Time.frameCount % 60 == 0) Debug.Log($"[GRAVITY MAP] panLocal:{gravityInPanLocal} -> shader:{gravityForShader} tilt:{tiltAngle:F2}");
+            // clamp magnitude to avoid huge numbers
+            float mag = gravityForShader.magnitude;
+            if (mag > 2.0f) gravityForShader = gravityForShader.normalized * 2.0f;
+/*
+// --- debug injection before Graphics.Blit(null, rtVelocity, velocityMaterial);
+velocityMaterial.SetFloat("_DebugMode", 1f); // 1=show G, 2=show g_tangent, 3=show mag, 0=normal
+velocityMaterial.SetFloat("_DebugScale", 0.1f); // 見やすい値に調整
+// also reduce gains to make visible and stable
+velocityMaterial.SetFloat("_kSlope", 0.0f);   // turn off slope to isolate gravity
+velocityMaterial.SetFloat("_kGravity", 1.0f);
+velocityMaterial.SetFloat("_maxVel", 2.0f);
+*/
 
-// これを velocityMaterial に渡す（shader 側は _Gravity.x=_Gx, _Gravity.y=_Gy を想定）
-velocityMaterial.SetVector("_Gravity", new Vector4(gravityForShader.x, gravityForShader.y, gravityForShader.z, 0f));
+            velocityMaterial.SetVector("_Gravity", new Vector4(gravityForShader.x, gravityForShader.y, gravityForShader.z, 0f));
             velocityMaterial.SetTexture("_HeightMap", rtHeight);
             velocityMaterial.SetTexture("_NormalMap", rtNormal);
             if (rimHeightTexture != null) velocityMaterial.SetTexture("_RimHeight", rimHeightTexture);
 
             Graphics.Blit(null, rtVelocity, velocityMaterial);
         }
+
 
         // 5) 低解像度 velocity を CPU に読み出し（間引き、重いなら interval を長く）
         if (Time.time - lastVelocityReadTime >= velocitySampleInterval)
@@ -398,8 +415,6 @@ velocityMaterial.SetVector("_Gravity", new Vector4(gravityForShader.x, gravityFo
             if (len > maxV) maxV = len;
         }
         float avg = sum / Mathf.Max(1, cnt);
-        if (maxV > 0.001f)
-            Debug.Log($"[VEL DEBUG] max:{maxV:F4}, avg:{avg:F4}");
     }
 
     // -------------------------
@@ -421,48 +436,18 @@ velocityMaterial.SetVector("_Gravity", new Vector4(gravityForShader.x, gravityFo
             e.y = (e.y > 180f) ? e.y - 360f : e.y;
             e.z = (e.z > 180f) ? e.z - 360f : e.z;
 
-            float deadAngle = 0.7f; // degrees
-            if (Mathf.Abs(e.x) < deadAngle && Mathf.Abs(e.z) < deadAngle)
-            {
-                gyroUnity = Quaternion.identity;
-            }
-
-            // スムージング（前回値と slerp）
-            panLocalRotation = Quaternion.Slerp(prevPanLocalRotation, gyroUnity, 0.08f);
-            prevPanLocalRotation = panLocalRotation;
+            panLocalRotation = gyroUnity;
         }
         else
         {
-            // PC: キーと右ドラッグで tiltX/tiltY を更新するが、panTransform を回転させない
-            float dt = Time.deltaTime;
+            // PC: キーで tiltX/tiltY を更新する
             float kx = Input.GetAxis("Horizontal"); // A/D or Left/Right
             float ky = Input.GetAxis("Vertical");   // W/S or Up/Down
-            tiltX += -kx * pcTiltSpeed * dt;
-            tiltY += ky * pcTiltSpeed * dt;
+            tiltX = kx * pcTiltMax;
+            tiltY = ky * pcTiltMax;
 
-            if (Input.GetMouseButtonDown(1))
-            {
-                isRightMouseDragging = true;
-                lastMousePos = Input.mousePosition;
-            }
-            else if (Input.GetMouseButtonUp(1))
-            {
-                isRightMouseDragging = false;
-            }
-
-            if (isRightMouseDragging)
-            {
-                Vector3 delta = Input.mousePosition - lastMousePos;
-                tiltX += delta.x * mouseTiltSensitivity;
-                tiltY += delta.y * mouseTiltSensitivity;
-                lastMousePos = Input.mousePosition;
-            }
-
-            // clamp
-            tiltX = Mathf.Clamp(tiltX, -45f, 45f);
-            tiltY = Mathf.Clamp(tiltY, -45f, 45f);
-
-            // 内部回転を作る（見た目は変えない）
+            // 内部回転を作る
+            // tiltY = 縦入力（W/S）を X軸回転（pitch）に割り当て、tiltX = 横入力を Z軸回転（roll）に割り当て
             panLocalRotation = Quaternion.Euler(tiltY, 0f, -tiltX);
         }
     }
@@ -526,7 +511,7 @@ velocityMaterial.SetVector("_Gravity", new Vector4(gravityForShader.x, gravityFo
 
     void OnGUI()
     {
-        if (!showVelocityDebug || rtVelocity == null) return;
-        GUI.DrawTexture(new Rect(10, 10, 128, 128), rtVelocity, ScaleMode.ScaleToFit, false);
+        if (!showVelocityDebug || rtVelocityDebug == null) return;
+        GUI.DrawTexture(new Rect(10, 10, debugDisplaySize, debugDisplaySize), rtVelocityDebug, ScaleMode.ScaleToFit, false);
     }
 }

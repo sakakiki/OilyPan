@@ -65,5 +65,5 @@ Material:
     - _Smoothness: 0.1
     m_Colors:
     - _LightPosition: {r: 3, g: -3, b: 50, a: 0}
-    - _OilColor: {r: 0.88726926, g: 1, b: 0, a: 0.1254902}
+    - _OilColor: {r: 0.88600266, g: 1, b: 0, a: 0.0627451}
   m_BuildTextureStacks: []

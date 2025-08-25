@@ -454,28 +454,29 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: e8296872325c34193947ed03f20e0263, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
-  particleCount: 200
-  particleSize: 0.05
+  particleCount: 100
+  particleSize: 0.1
   heightMaterial: {fileID: 2100000, guid: d57438710729a423db8f40d98ea867d8, type: 2}
   normalMaterial: {fileID: 2100000, guid: c133cd6b94bda42a6b2741ed25e65ca9, type: 2}
   targetMaterial: {fileID: 2100000, guid: 959743135c5984fde8fd3ec975600385, type: 2}
   particleTexture: {fileID: 2800000, guid: cccb9bfa31aee4593a91bbfc109aa136, type: 3}
   textureResolution: 512
   velocityMaterial: {fileID: 2100000, guid: 1a421016a2c9b47cea07923dcfe07755, type: 2}
-  rimHeightTexture: {fileID: 2800000, guid: a394ffd4f135c4ede8e2ae085ac86b91, type: 3}
+  rimHeightTexture: {fileID: 2800000, guid: b372a0b0c8ec1445382aa3d970545e6f, type: 3}
   velocityResolution: 128
   velocitySampleInterval: 0.05
   velocityToParticleScale: 0.05
   velocitySmoothing: 0.15
   particleFriction: 1.5
-  maxParticleSpeed: 0.5
-  gravityScale: 0.5
+  maxParticleSpeed: 10
+  gravityScale: 10
   showVelocityDebug: 1
   useGyroOnDevice: 1
-  pcTiltSpeed: 40
-  mouseTiltSensitivity: 0.2
-  enableDebugReadback: 1
+  pcTiltMax: 45
+  enableDebugReadback: 0
   savePngInterval: 1
+  velocityVisualizerMaterial: {fileID: 2100000, guid: a74576e4934b14aeab82b6b7f40e1a7f, type: 2}
+  debugDisplaySize: 128
 --- !u!4 &1154004113
 Transform:
   m_ObjectHideFlags: 0

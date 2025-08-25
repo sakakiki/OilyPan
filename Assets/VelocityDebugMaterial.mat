@@ -7,8 +7,8 @@ Material:
   m_CorrespondingSourceObject: {fileID: 0}
   m_PrefabInstance: {fileID: 0}
   m_PrefabAsset: {fileID: 0}
-  m_Name: VelocityMaterial
-  m_Shader: {fileID: 4800000, guid: 0ac96da658f034323bfa0e2edb554b58, type: 3}
+  m_Name: VelocityDebugMaterial
+  m_Shader: {fileID: 4800000, guid: 71ec9f7aa6c2c41b5be4871c5856c6a8, type: 3}
   m_Parent: {fileID: 0}
   m_ModifiedSerializedProperties: 0
   m_ValidKeywords: []
@@ -38,10 +38,14 @@ Material:
     m_Ints: []
     m_Floats:
     - _Damping: 0.95
+    - _DebugMode: 1
+    - _DebugScale: 0.1
+    - _Mode: 3
+    - _Scale: 0.02
     - _kGravity: 1
     - _kSlope: 0.6
     - _maxVel: 0.6
     m_Colors:
-    - _Gravity: {r: 0, g: 0, b: 0, a: 0}
+    - _Gravity: {r: 0.02, g: 0, b: 0, a: 0}
     - _TexelSize: {r: 0.0078125, g: 0.0078125, b: 0, a: 0}
   m_BuildTextureStacks: []
