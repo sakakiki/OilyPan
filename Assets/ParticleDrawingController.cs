@@ -30,12 +30,12 @@ public class ParticleDrawingController : MonoBehaviour
     [SerializeField] private Material velocityMaterial; // VelocityCalc.shader を割当て
     [SerializeField] private Texture2D rimHeightTexture; // R チャンネルに rim height を格納
     [SerializeField] private int velocityResolution = 128; // 低解像度 RT（CPU Readback 用）
-    [SerializeField] private float velocitySampleInterval = 0.03f; // Readback インターバル（秒）- 応答性向上
-    [SerializeField] private float velocityToParticleScale = 3.0f; // velocity -> particle 移動倍率（増加）
-    [SerializeField] private float velocitySmoothing = 0.25f; // 0..1（応答性向上のため若干増加）
-    [SerializeField] private float particleFriction = 0.8f;   // 摩擦を減らして流れやすく
-    [SerializeField] private float maxParticleSpeed = 2.0f;    // 粒子の上限速度を大幅に増加
-    [SerializeField] private float gravityScale = 1.5f;       // 重力の影響を増加
+    [SerializeField] private float velocitySampleInterval = 0.02f; // Readback インターバル（秒）- 最高応答性
+    [SerializeField] private float velocityToParticleScale = 6.0f; // velocity -> particle 移動倍率（さらに増加）
+    [SerializeField] private float velocitySmoothing = 0.4f; // 0..1（応答性をさらに向上）
+    [SerializeField] private float particleFriction = 0.3f;   // 摩擦をさらに減らしてスムーズに
+    [SerializeField] private float maxParticleSpeed = 4.0f;    // 粒子の上限速度をさらに増加
+    [SerializeField] private float gravityScale = 2.5f;       // 重力の影響をさらに増加
     [SerializeField] private bool showVelocityDebug = true;   // 画面に RT を小さく表示
 
     [Header("入力 / 傾き")]
@@ -191,11 +191,11 @@ public class ParticleDrawingController : MonoBehaviour
         // Velocity shader のより安全な初期値
         if (velocityMaterial != null)
         {
-            velocityMaterial.SetFloat("_kSlope", 1.2f);   // 勾配感度を増加
-            velocityMaterial.SetFloat("_kGravity", 2.0f); // 重力寄与を増加
-            velocityMaterial.SetFloat("_maxVel", 2.0f);   // シェーダー側上限も増加
+            velocityMaterial.SetFloat("_kSlope", 2.5f);   // 勾配感度をさらに増加
+            velocityMaterial.SetFloat("_kGravity", 4.0f); // 重力寄与をさらに増加
+            velocityMaterial.SetFloat("_maxVel", 4.0f);   // シェーダー側上限をさらに増加
         }
-        velocityToParticleScale = Mathf.Clamp(velocityToParticleScale, 0.05f, 5.0f); // 上限を拡張
+        velocityToParticleScale = Mathf.Clamp(velocityToParticleScale, 0.05f, 10.0f); // 上限をさらに拡張
 
         rtVelocityDebug = new RenderTexture(debugDisplaySize, debugDisplaySize, 0, RenderTextureFormat.ARGBHalf) {
             useMipMap = false, autoGenerateMips = false, filterMode = FilterMode.Bilinear, wrapMode = TextureWrapMode.Clamp
