@@ -30,12 +30,12 @@ public class ParticleDrawingController : MonoBehaviour
     [SerializeField] private Material velocityMaterial; // VelocityCalc.shader を割当て
     [SerializeField] private Texture2D rimHeightTexture; // R チャンネルに rim height を格納
     [SerializeField] private int velocityResolution = 128; // 低解像度 RT（CPU Readback 用）
-    [SerializeField] private float velocitySampleInterval = 0.05f; // Readback インターバル（秒）
-    [SerializeField] private float velocityToParticleScale = 1.0f; // velocity -> particle 移動倍率
-    [SerializeField] private float velocitySmoothing = 0.15f; // 0..1（小さいほど応答速い、0.15くらいが滑らか）
-    [SerializeField] private float particleFriction = 1.5f;   // 秒あたりの摩擦（1〜3くらい）
-    [SerializeField] private float maxParticleSpeed = 0.5f;    // 粒子が出せる上限速度（画面単位/sec）
-    [SerializeField] private float gravityScale = 0.5f;       // shader に渡す前に重力を抑える
+    [SerializeField] private float velocitySampleInterval = 0.03f; // Readback インターバル（秒）- 応答性向上
+    [SerializeField] private float velocityToParticleScale = 3.0f; // velocity -> particle 移動倍率（増加）
+    [SerializeField] private float velocitySmoothing = 0.25f; // 0..1（応答性向上のため若干増加）
+    [SerializeField] private float particleFriction = 0.8f;   // 摩擦を減らして流れやすく
+    [SerializeField] private float maxParticleSpeed = 2.0f;    // 粒子の上限速度を大幅に増加
+    [SerializeField] private float gravityScale = 1.5f;       // 重力の影響を増加
     [SerializeField] private bool showVelocityDebug = true;   // 画面に RT を小さく表示
 
     [Header("入力 / 傾き")]
@@ -191,11 +191,11 @@ public class ParticleDrawingController : MonoBehaviour
         // Velocity shader のより安全な初期値
         if (velocityMaterial != null)
         {
-            velocityMaterial.SetFloat("_kSlope", 0.6f);   // 小さめ
-            velocityMaterial.SetFloat("_kGravity", 1.0f); // 小さめ
-            velocityMaterial.SetFloat("_maxVel", 0.6f);   // 安全側
+            velocityMaterial.SetFloat("_kSlope", 1.2f);   // 勾配感度を増加
+            velocityMaterial.SetFloat("_kGravity", 2.0f); // 重力寄与を増加
+            velocityMaterial.SetFloat("_maxVel", 2.0f);   // シェーダー側上限も増加
         }
-        velocityToParticleScale = Mathf.Clamp(velocityToParticleScale, 0.05f, 2.0f); // 安全域
+        velocityToParticleScale = Mathf.Clamp(velocityToParticleScale, 0.05f, 5.0f); // 上限を拡張
 
         rtVelocityDebug = new RenderTexture(debugDisplaySize, debugDisplaySize, 0, RenderTextureFormat.ARGBHalf) {
             useMipMap = false, autoGenerateMips = false, filterMode = FilterMode.Bilinear, wrapMode = TextureWrapMode.Clamp
@@ -226,14 +226,20 @@ public class ParticleDrawingController : MonoBehaviour
         // 4) velocity RT を GPU で計算（height + normal を参照）→ 低解像度 RT に出力
         if (velocityMaterial != null)
         {
-            // Debug-safe gravity mapping (temporary)
-            // compute in pan-local
+            // 重力をパンのローカル座標系に変換
             Vector3 gravityWorld = Physics.gravity; // (0,-9.81,0)
             Vector3 gravityInPanLocal = Quaternion.Inverse(panLocalRotation) * gravityWorld;
 
-            // Map: pan.x -> shader.x, pan.z -> shader.y (screen-forward is pan.z)
-            float rawGx = gravityInPanLocal.x;
-            float rawGz = gravityInPanLocal.z;
+            // パンの座標系からテクスチャ座標系へのマッピング
+            // パンX軸（左右傾き） → テクスチャU方向、パンZ軸（前後傾き） → テクスチャV方向
+            float rawGx = gravityInPanLocal.x;  // テクスチャU方向（左右）の重力成分
+            float rawGz = gravityInPanLocal.z;  // テクスチャV方向（前後）の重力成分
+            
+            // デバッグ用：重力成分をログ出力
+            if (Time.frameCount % 30 == 0) // 30フレームに1回ログ出力（パフォーマンス考慮）
+            {
+                Debug.Log($"Gravity local: ({gravityInPanLocal.x:F3}, {gravityInPanLocal.y:F3}, {gravityInPanLocal.z:F3}) | Raw shader: ({rawGx:F3}, {rawGz:F3})");
+            }
 
             // scale down heavily for debug so we see effect without blow-up
             float debugScale = Mathf.Min(gravityScale, 0.5f); // force <= 0.5 for now
@@ -427,16 +433,14 @@ velocityMaterial.SetFloat("_maxVel", 2.0f);
         if (usingGyro)
         {
             Quaternion g = Input.gyro.attitude;
-            Quaternion gyroUnity = new Quaternion(-g.x, -g.y, g.z, g.w);
-
-            // デッドゾーン（微小回転は identity に置き換え）
-            Vector3 e = gyroUnity.eulerAngles;
-            // convert to -180..180
-            e.x = (e.x > 180f) ? e.x - 360f : e.x;
-            e.y = (e.y > 180f) ? e.y - 360f : e.y;
-            e.z = (e.z > 180f) ? e.z - 360f : e.z;
-
-            panLocalRotation = gyroUnity;
+            // ジャイロ座標系からUnity座標系への変換を修正
+            // ジャイロ: x=pitch, y=yaw, z=roll → Unity: x=pitch, y=yaw, z=roll
+            Quaternion gyroUnity = new Quaternion(g.x, g.y, -g.z, g.w);
+            
+            // デバイス向きを考慮した回転補正（縦持ち想定）
+            // 90度回転してデバイスのピッチ/ロールをパンのX/Z軸に適切にマップ
+            Quaternion deviceOrientation = Quaternion.Euler(90, 0, 0);
+            panLocalRotation = deviceOrientation * gyroUnity;
         }
         else
         {
@@ -446,8 +450,8 @@ velocityMaterial.SetFloat("_maxVel", 2.0f);
             tiltX = kx * pcTiltMax;
             tiltY = ky * pcTiltMax;
 
-            // 内部回転を作る
-            // tiltY = 縦入力（W/S）を X軸回転（pitch）に割り当て、tiltX = 横入力を Z軸回転（roll）に割り当て
+            // パンの回転を作る（テクスチャ座標系と一致、A/D方向を反転）
+            // A/D（左右入力）→ Z軸回転（ロール）→ U方向重力, W/S（前後入力）→ X軸回転（ピッチ）→ V方向重力
             panLocalRotation = Quaternion.Euler(tiltY, 0f, -tiltX);
         }
     }

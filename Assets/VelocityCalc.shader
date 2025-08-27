@@ -153,22 +153,20 @@ Shader "Hidden/VelocityCalc"
                 float2 grad = SampleHeightGradient(uv);
 
                 // --------------------
-                // 重力ベクトルの再構築（重要）
-                // - C# 側の契約: _Gravity.x = panLocal.x, _Gravity.y = panLocal.z
-                // - ここでは tex U に対応させるため 3D ベクトル (gx, 0, gz) を作る
-                //   （Y方向がテクスチャ平面の法線方向として扱われるため中間の要素を 0 に）
-                // - ここが C# の詰め方と食い違うと「上下傾きが反映されない」等の問題が起きる
+                // 重力ベクトルをテクスチャ座標系で直接扱う（2D計算）
+                // - C# 側: _Gravity.x = パンX軸成分, _Gravity.y = パンZ軸成分
+                // - テクスチャ座標系: U方向=X軸, V方向=Z軸として直接マッピング  
+                // - 3D変換を避けて座標系の混乱を防ぐ
                 // --------------------
-                float3 G = float3(_Gravity.x, 0.0, _Gravity.y);
-
+                float2 g_2d = float2(_Gravity.x, _Gravity.y);
+                
                 // --------------------
-                // 重力を表面の接線（tangent）成分に射影する
-                // - g_tangent3 = G - N * dot(G, N)
-                //   つまり G のうち法線方向成分を取り除き、面に沿う成分のみを残す
-                // - 返すのはテクスチャ座標に対応する2成分 (x,z)
+                // 法線から表面の傾きを2Dで計算
+                // - 法線 N.xy が表面の傾き方向を示している
+                // - N.z（垂直成分）で正規化して接線面での重力成分を求める
                 // --------------------
-                float3 g_tangent3 = G - N * dot(G, N);
-                float2 g_tangent = float2(g_tangent3.x, g_tangent3.z);
+                float2 surface_tilt = N.xy / max(N.z, 0.001); // ゼロ除算防止
+                float2 g_tangent = g_2d - surface_tilt * dot(g_2d, surface_tilt) / max(dot(surface_tilt, surface_tilt), 0.001);
 
                 // --------------------
                 // 速度の見積もり
