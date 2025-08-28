@@ -5,7 +5,7 @@ Shader "Hidden/VelocityCalc"
         // 入力テクスチャ群
         _HeightMap ("HeightMap (R channel = height)", 2D) = "white" {}    // 油の厚みをRチャンネルに格納している想定
         _NormalMap ("NormalMap (RGB)", 2D) = "bump" {}                    // HeightMap から生成した法線マップ（0..1表現）
-        _RimHeight ("RimHeight (mask/height)", 2D) = "white" {}           // フライパン内領域のマスクまたは縁の高さ（0で外側）
+        _PanHeight ("PanHeight (mask/height)", 2D) = "white" {}           // フライパン内領域のマスクまたは縁の高さ（0で外側）
         
         // C# 側から渡すパラメータ
         // 注意: このシェーダでは _Gravity.x = panLocal.x, _Gravity.y = panLocal.z を期待する（C# 側の割当と厳密に一致させること）
@@ -41,7 +41,7 @@ Shader "Hidden/VelocityCalc"
             // --- テクスチャ／パラメータ宣言 ---
             sampler2D _HeightMap;    // R = height
             sampler2D _NormalMap;    // RGB = normal (0..1)
-            sampler2D _RimHeight;    // R = rim mask or rim height (0 = outside)
+            sampler2D _PanHeight;    // R = rim mask or rim height (0 = outside)
 
             // _Gravity は C# が (pan.x, pan.z) を x,y に入れて渡す想定
             float4 _Gravity;
@@ -92,6 +92,7 @@ Shader "Hidden/VelocityCalc"
             // --------------------
             inline float2 SampleHeightGradient(float2 uv)
             {
+                // --- 基本の中央差分（高さから求める勾配） ---
                 float2 ts = _TexelSize.xy;
                 // テクセルサイズが 0 にならないようにフォールバック
                 float ex = max(ts.x, 1e-6);
@@ -106,7 +107,33 @@ Shader "Hidden/VelocityCalc"
                 // 中央差分の公式
                 float hx = (hR - hL) / (2.0 * ex);
                 float hy = (hU - hD) / (2.0 * ey);
-                return float2(hx, hy);
+                float2 heightGrad = float2(hx, hy);
+                return heightGrad;
+                
+                /*
+                // --- フライパン高さ（PanHeight）からの中央差分 ---
+                // _PanHeight は R チャンネルに「水平に置いたときのその地点の高さ」を格納している想定
+                // 未設定でも tex2D は (1,1,1,1) を返すので結果は 0 になりやすいが、
+                // 確実に動作させるため直接参照して差分をとる。
+                float pL = tex2D(_PanHeight, uv - float2(ex, 0)).r;
+                float pR = tex2D(_PanHeight, uv + float2(ex, 0)).r;
+                float pD = tex2D(_PanHeight, uv - float2(0, ey)).r;
+                float pU = tex2D(_PanHeight, uv + float2(0, ey)).r;
+                float hx_pan = (pR - pL) / (2.0 * ex);
+                float hy_pan = (pU - pD) / (2.0 * ey);
+                float2 panGrad = float2(hx_pan, hy_pan);
+
+                // --- 必要なら PanHeight のスケールを掛けたい場合（コメント解除して使用） ---
+                // e.g. if PanHeight uses different units, declare _PanHeightScale in Properties and uncomment:
+                // panGrad *= _PanHeightScale;
+
+                // --- 合成：表面の総勾配 = 油の勾配 + フライパンの勾配 ---
+                // （加算で表面高さの勾配を表す。重みをつけたい場合は panGrad を weight で乗じる等）
+                float2 combinedGrad = heightGrad + panGrad;
+
+                // --- 返り値 ---
+                return combinedGrad;
+                */
             }
 
             // --------------------
@@ -123,7 +150,7 @@ Shader "Hidden/VelocityCalc"
                 // - RimHeight テクスチャの R チャンネルが 0 以下なら「パン外」とみなして速度 0 を返す
                 // - 運用上、デバッグ時は rim をすべて 1 にしてマスクしないと良い（内部確認用）
                 // --------------------
-                float rimH = tex2D(_RimHeight, uv).r;
+                float rimH = tex2D(_PanHeight, uv).r;
                 if (rimH <= 0.0) {
                     // 外側は速度無し（黒）
                     return float4(0.0, 0.0, 0.0, 1.0);

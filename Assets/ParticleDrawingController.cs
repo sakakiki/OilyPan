@@ -28,7 +28,7 @@ public class ParticleDrawingController : MonoBehaviour
 
     [Header("Velocity (低解像度)")]
     [SerializeField] private Material velocityMaterial; // VelocityCalc.shader を割当て
-    [SerializeField] private Texture2D rimHeightTexture; // R チャンネルに rim height を格納
+    [SerializeField] private Texture2D panHeightTexture; // R チャンネルに pan height を格納
     [SerializeField] private int velocityResolution = 128; // 低解像度 RT（CPU Readback 用）
     [SerializeField] private float velocitySampleInterval = 0.03f; // Readback インターバル（秒）- 応答性向上
     [SerializeField] private float velocityToParticleScale = 3.0f; // velocity -> particle 移動倍率（増加）
@@ -74,8 +74,6 @@ public class ParticleDrawingController : MonoBehaviour
     // PC 傾き管理（角度で管理）
     private float tiltX = 0f; // around Z or X depending mapping
     private float tiltY = 0f;
-    private bool isRightMouseDragging = false;
-    private Vector3 lastMousePos = Vector3.zero;
 
     void Start()
     {
@@ -161,7 +159,7 @@ public class ParticleDrawingController : MonoBehaviour
         if (velocityMaterial != null)
         {
             velocityMaterial.SetVector("_TexelSize", new Vector4(1.0f / velocityResolution, 1.0f / velocityResolution, 0, 0));
-            if (rimHeightTexture != null) velocityMaterial.SetTexture("_RimHeight", rimHeightTexture);
+            if (panHeightTexture != null) velocityMaterial.SetTexture("_PanHeight", panHeightTexture);
             // 初期チューニング値（Inspector で変更可能）
             velocityMaterial.SetFloat("_kSlope", 2.0f);
             velocityMaterial.SetFloat("_kGravity", 5.0f);
@@ -201,9 +199,6 @@ public class ParticleDrawingController : MonoBehaviour
             useMipMap = false, autoGenerateMips = false, filterMode = FilterMode.Bilinear, wrapMode = TextureWrapMode.Clamp
         };
         rtVelocityDebug.Create();
-
-
-        Debug.Log("[DEBUG] ParticleDrawingController_Debug_Modified started. RT sizes: " + textureResolution + "x" + textureResolution + ", velocity: " + velocityResolution + "x" + velocityResolution);
     }
 
     void Update()
@@ -234,12 +229,6 @@ public class ParticleDrawingController : MonoBehaviour
             // パンX軸（左右傾き） → テクスチャU方向、パンZ軸（前後傾き） → テクスチャV方向
             float rawGx = gravityInPanLocal.x;  // テクスチャU方向（左右）の重力成分
             float rawGz = gravityInPanLocal.z;  // テクスチャV方向（前後）の重力成分
-            
-            // デバッグ用：重力成分をログ出力
-            if (Time.frameCount % 30 == 0) // 30フレームに1回ログ出力（パフォーマンス考慮）
-            {
-                Debug.Log($"Gravity local: ({gravityInPanLocal.x:F3}, {gravityInPanLocal.y:F3}, {gravityInPanLocal.z:F3}) | Raw shader: ({rawGx:F3}, {rawGz:F3})");
-            }
 
             // scale down heavily for debug so we see effect without blow-up
             float debugScale = Mathf.Min(gravityScale, 0.5f); // force <= 0.5 for now
@@ -248,20 +237,10 @@ public class ParticleDrawingController : MonoBehaviour
             // clamp magnitude to avoid huge numbers
             float mag = gravityForShader.magnitude;
             if (mag > 2.0f) gravityForShader = gravityForShader.normalized * 2.0f;
-/*
-// --- debug injection before Graphics.Blit(null, rtVelocity, velocityMaterial);
-velocityMaterial.SetFloat("_DebugMode", 1f); // 1=show G, 2=show g_tangent, 3=show mag, 0=normal
-velocityMaterial.SetFloat("_DebugScale", 0.1f); // 見やすい値に調整
-// also reduce gains to make visible and stable
-velocityMaterial.SetFloat("_kSlope", 0.0f);   // turn off slope to isolate gravity
-velocityMaterial.SetFloat("_kGravity", 1.0f);
-velocityMaterial.SetFloat("_maxVel", 2.0f);
-*/
-
             velocityMaterial.SetVector("_Gravity", new Vector4(gravityForShader.x, gravityForShader.y, gravityForShader.z, 0f));
             velocityMaterial.SetTexture("_HeightMap", rtHeight);
             velocityMaterial.SetTexture("_NormalMap", rtNormal);
-            if (rimHeightTexture != null) velocityMaterial.SetTexture("_RimHeight", rimHeightTexture);
+            if (panHeightTexture != null) velocityMaterial.SetTexture("_RimHeight", panHeightTexture);
 
             Graphics.Blit(null, rtVelocity, velocityMaterial);
         }
@@ -274,6 +253,7 @@ velocityMaterial.SetFloat("_maxVel", 2.0f);
             lastVelocityReadTime = Time.time;
         }
 
+        /*
         // 6) デバッグ読み出し・保存（有効時のみ・インターバルで制御）
         if (enableDebugReadback && Time.time - lastSaveTime >= savePngInterval)
         {
@@ -286,6 +266,7 @@ velocityMaterial.SetFloat("_maxVel", 2.0f);
 
             lastSaveTime = Time.time;
         }
+        */
     }
 
     // -------------------------
